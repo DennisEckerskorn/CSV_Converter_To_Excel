@@ -26,7 +26,7 @@ A modern and user-friendly application to convert CSV files into Excel files wit
 
 You can download the pre-built executable directly from this repository and run it on your Windows machine:
 
-1. Go to the **[Releases Section](https://github.com/DennisEckerskorn/CSV_Converter_To_Excel/releases/download/CSV_Converter/CSVConversion.exe)** of this repository.
+1. Go to the **[Releases Section](https://github.com/DennisEckerskorn/CSV_Converter_To_Excel/releases/tag/CSV_Converter)** of this repository.
 2. Download the file `CSVConversion.exe`.
 3. Double-click the `.exe` file to launch the application.
 
