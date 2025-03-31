@@ -5,10 +5,12 @@ from tkinter import filedialog, messagebox
 
 def add_hour_to_time_column(df):
     """Adds an hour to the 'time' column"""
+    # Normalizar formato de hora para incluir segundos
+    df['Time'] = df['Time'].apply(lambda t: t if len(t.split(':')) == 3 else t + ':00')
     df['datetime'] = pd.to_datetime(df['Date'] + ' ' + df['Time'], errors='coerce')  # Combine and convert to datetime
     if df['datetime'].isna().any():
         raise ValueError("Some rows have invalid 'Date' or 'Time' values.")
-    df['datetime + 1h'] = df['datetime'] + pd.Timedelta(hours=1)  # Add 1 hour
+    df['datetime + 1h'] = df['datetime'] + pd.Timedelta(hours=2)  # Add 2 hours
     return df
 
 
