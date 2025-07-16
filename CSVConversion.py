@@ -1,6 +1,8 @@
 import pandas as pd
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
+from openpyxl.styles import PatternFill
+from openpyxl.formatting.rule import CellIsRule
 
 
 def add_hour_to_time_column(df):
@@ -88,6 +90,28 @@ def process_csv(input_path, output_path):
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             df.to_excel(writer, sheet_name='Calls', index=False)
             create_summary(df, writer)
+            callback_df = calculate_callback_times(df)
+            callback_df.to_excel(writer, sheet_name='Callbacks', index=False)
+
+            # Obtener el workbook y la hoja "Callbacks"
+            workbook = writer.book
+            sheet = workbook["Callbacks"]
+
+            # Definir el color de fondo (rojo claro)
+            red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+
+            # Buscar columna "Delay (minutes)" (empieza en A1)
+            for col in sheet.iter_cols(1, sheet.max_column):
+                if col[0].value == "Delay (minutes)":
+                    delay_col_letter = col[0].column_letter
+                    break
+
+            # Aplicar regla condicional si encontramos la columna
+            if 'delay_col_letter' in locals():
+                sheet.conditional_formatting.add(
+                    f"{delay_col_letter}2:{delay_col_letter}{sheet.max_row}",
+                    CellIsRule(operator='greaterThan', formula=['40'], fill=red_fill)
+                )
 
         messagebox.showinfo("Success", f"The Excel file has been saved at: {output_path}")
     except Exception as e:
@@ -123,6 +147,37 @@ def convert_file():
         return
 
     process_csv(input_path, output_path)
+
+
+def calculate_callback_times(df):
+    """Calcula el tiempo que tardó en devolverse cada llamada perdida, ordenado por fecha"""
+    callbacks = []
+    missed_calls = df[(df['Incoming Calls'] == 'Yes') & (df['Answered'] == 'No')].copy()
+    outgoing_calls = df[df['Outgoing Calls'] == 'Yes'].copy()
+
+    for _, missed in missed_calls.iterrows():
+        missed_number = missed['Number']
+        missed_time = missed['Time + 1h']
+        later_outgoing = outgoing_calls[
+            (outgoing_calls['Number'] == missed_number) &
+            (outgoing_calls['Time + 1h'] > missed_time)
+            ].sort_values(by='Time + 1h')
+
+        if not later_outgoing.empty:
+            first_callback = later_outgoing.iloc[0]
+            delta = first_callback['Time + 1h'] - missed_time
+            callbacks.append({
+                'Date': missed_time.date(),  # Agrupación por día
+                'Missed Call Time': missed_time,
+                'Callback Time': first_callback['Time + 1h'],
+                'Delay (minutes)': int(delta.total_seconds() // 60),
+                'Number': missed_number,
+                'User Name': missed['User Name']
+            })
+
+    callback_df = pd.DataFrame(callbacks)
+    callback_df = callback_df.sort_values(by='Missed Call Time')
+    return callback_df
 
 
 # Create the main window using CustomTkinter
