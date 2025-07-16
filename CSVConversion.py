@@ -3,22 +3,47 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from openpyxl.styles import PatternFill
 from openpyxl.formatting.rule import CellIsRule
+import re
+
+
+def normalize_number(number):
+    """Convierte cualquier número a su forma estándar: últimos 9 dígitos"""
+    digits = re.sub(r'\D', '', str(number))
+    return digits[-9:] if len(digits) >= 9 else digits
+
+
+def load_excluded_numbers(file_path="excluded_numbers.txt"):
+    """Lee y normaliza los números desde un archivo de texto"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return [normalize_number(line.strip()) for line in f if line.strip()]
+    except FileNotFoundError:
+        messagebox.showwarning("Aviso", "No se encontró 'excluded_numbers.txt'. No se excluirán números.")
+        return []
+    except Exception as e:
+        messagebox.showerror("Error", f"Error al leer la lista de exclusión:\n{str(e)}")
+        return []
+
+
+def exclude_numbers(df, excluded_numbers):
+    """Excluye filas cuyo número normalizado aparece en la lista"""
+    df['NormalizedNumber'] = df['Number'].astype(str).apply(normalize_number)
+    df = df[~df['NormalizedNumber'].isin(excluded_numbers)].copy()
+    df.drop(columns=['NormalizedNumber'], inplace=True)
+    return df
 
 
 def add_hour_to_time_column(df):
-    """Adds an hour to the 'time' column"""
-    # Normalizar formato de hora para incluir segundos
     df['Time'] = df['Time'].apply(lambda t: t if len(t.split(':')) == 3 else t + ':00')
-    df['datetime'] = pd.to_datetime(df['Date'] + ' ' + df['Time'], errors='coerce')  # Combine and convert to datetime
+    df['datetime'] = pd.to_datetime(df['Date'] + ' ' + df['Time'], errors='coerce')
     if df['datetime'].isna().any():
         raise ValueError("Some rows have invalid 'Date' or 'Time' values.")
-    df['datetime + 1h'] = df['datetime'] + pd.Timedelta(hours=2)  # Add 2 hours
+    df['datetime + 1h'] = df['datetime'] + pd.Timedelta(hours=2)
     return df
 
 
 def add_outbound_column(df):
-    """Creates the 'outbound' column based on the 'Inbound' column"""
-    df['Inbound'] = df['Inbound'].astype(bool)  # Ensure the column is boolean
+    df['Inbound'] = df['Inbound'].astype(bool)
     df['outbound'] = ~df['Inbound']
     df['Inbound'] = df['Inbound'].map({True: 'Yes', False: 'No'})
     df['outbound'] = df['outbound'].map({True: 'Yes', False: 'No'})
@@ -26,19 +51,13 @@ def add_outbound_column(df):
 
 
 def reorder_and_select_columns(df):
-    """Reorders and selects only the relevant columns"""
-    # Convert 'Answered' to 'Yes'/'No'
     df['Answered'] = df['Answered'].map({True: 'Yes', False: 'No'})
-
-    # Select and reorder columns
     columns = [
         'UserName', 'UserEmail', 'UserPhone', 'Source', 'SourceDetail',
         'Date', 'Time', 'datetime + 1h', 'Duration', 'Answered',
         'Inbound', 'outbound', 'Number', 'PhonebookName'
     ]
-    df = df[columns].copy()  # Create a copy to avoid SettingWithCopyWarning
-
-    # Rename columns for clarity
+    df = df[columns].copy()
     df = df.rename(columns={
         'UserName': 'User Name',
         'UserEmail': 'User Email',
@@ -59,7 +78,6 @@ def reorder_and_select_columns(df):
 
 
 def create_summary(df, writer):
-    """Creates a summary sheet in the Excel file"""
     total_calls = len(df)
     total_incoming = len(df[df['Incoming Calls'] == 'Yes'])
     total_outgoing = len(df[df['Outgoing Calls'] == 'Yes'])
@@ -74,83 +92,7 @@ def create_summary(df, writer):
     summary_df.to_excel(writer, sheet_name='Summary', index=False)
 
 
-def process_csv(input_path, output_path):
-    """Reads the CSV file, applies transformations, and saves it as an Excel file"""
-    try:
-        df = pd.read_csv(input_path, sep='\t')
-        required_columns = ['UserName', 'UserEmail', 'UserPhone', 'Source', 'SourceDetail',
-                            'Date', 'Time', 'Duration', 'Answered', 'Inbound', 'Number', 'PhonebookName']
-        if not all(col in df.columns for col in required_columns):
-            raise ValueError("The CSV file does not contain the required columns.")
-
-        df = add_hour_to_time_column(df)
-        df = add_outbound_column(df)
-        df = reorder_and_select_columns(df)
-
-        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name='Calls', index=False)
-            create_summary(df, writer)
-            callback_df = calculate_callback_times(df)
-            callback_df.to_excel(writer, sheet_name='Callbacks', index=False)
-
-            # Obtener el workbook y la hoja "Callbacks"
-            workbook = writer.book
-            sheet = workbook["Callbacks"]
-
-            # Definir el color de fondo (rojo claro)
-            red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-
-            # Buscar columna "Delay (minutes)" (empieza en A1)
-            for col in sheet.iter_cols(1, sheet.max_column):
-                if col[0].value == "Delay (minutes)":
-                    delay_col_letter = col[0].column_letter
-                    break
-
-            # Aplicar regla condicional si encontramos la columna
-            if 'delay_col_letter' in locals():
-                sheet.conditional_formatting.add(
-                    f"{delay_col_letter}2:{delay_col_letter}{sheet.max_row}",
-                    CellIsRule(operator='greaterThan', formula=['40'], fill=red_fill)
-                )
-
-        messagebox.showinfo("Success", f"The Excel file has been saved at: {output_path}")
-    except Exception as e:
-        messagebox.showerror("Error", f"Error during conversion: {e}")
-
-
-def select_file():
-    """Opens a dialog to select a CSV file"""
-    file_path = filedialog.askopenfilename(
-        title="Select CSV file",
-        filetypes=(("CSV Files", "*.csv"), ("All Files", "*.*"))
-    )
-    csv_path.set(file_path)
-
-
-def select_save_path():
-    """Opens a dialog to select the path to save the Excel file"""
-    file_path = filedialog.asksaveasfilename(
-        title="Save Excel file",
-        defaultextension=".xlsx",
-        filetypes=(("Excel Files", "*.xlsx"), ("All Files", "*.*"))
-    )
-    excel_path.set(file_path)
-
-
-def convert_file():
-    """Converts the CSV file into an Excel file"""
-    input_path = csv_path.get()
-    output_path = excel_path.get()
-
-    if not input_path or not output_path:
-        messagebox.showwarning("Warning", "Please select a CSV file and a save path.")
-        return
-
-    process_csv(input_path, output_path)
-
-
 def calculate_callback_times(df):
-    """Calcula el tiempo que tardó en devolverse cada llamada perdida, ordenado por fecha"""
     callbacks = []
     missed_calls = df[(df['Incoming Calls'] == 'Yes') & (df['Answered'] == 'No')].copy()
     outgoing_calls = df[df['Outgoing Calls'] == 'Yes'].copy()
@@ -167,12 +109,13 @@ def calculate_callback_times(df):
             first_callback = later_outgoing.iloc[0]
             delta = first_callback['Time + 1h'] - missed_time
             callbacks.append({
-                'Date': missed_time.date(),  # Agrupación por día
+                'Date': missed_time.date(),
                 'Missed Call Time': missed_time,
                 'Callback Time': first_callback['Time + 1h'],
                 'Delay (minutes)': int(delta.total_seconds() // 60),
                 'Number': missed_number,
-                'User Name': missed['User Name']
+                'User Name': missed['User Name'],
+                'Phonebook Name': missed['Phonebook Name']
             })
 
     callback_df = pd.DataFrame(callbacks)
@@ -180,19 +123,87 @@ def calculate_callback_times(df):
     return callback_df
 
 
-# Create the main window using CustomTkinter
-ctk.set_appearance_mode("System")  # Modes: "System" (default), "Dark", "Light"
-ctk.set_default_color_theme("blue")  # Themes: "blue" (default), "green", "dark-blue"
+def process_csv(input_path, output_path):
+    try:
+        df_original = pd.read_csv(input_path, sep='\t')
+        required_columns = ['UserName', 'UserEmail', 'UserPhone', 'Source', 'SourceDetail',
+                            'Date', 'Time', 'Duration', 'Answered', 'Inbound', 'Number', 'PhonebookName']
+
+        if not all(col in df_original.columns for col in required_columns):
+            raise ValueError("The CSV file does not contain the required columns.")
+
+        excluded_numbers = load_excluded_numbers("excluded_numbers.txt")
+        df = exclude_numbers(df_original.copy(), excluded_numbers)
+
+        df = add_hour_to_time_column(df)
+        df = add_outbound_column(df)
+        df = reorder_and_select_columns(df)
+
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Calls', index=False)
+            create_summary(df, writer)
+            callback_df = calculate_callback_times(df)
+            callback_df.to_excel(writer, sheet_name='Callbacks', index=False)
+
+            workbook = writer.book
+            sheet = workbook["Callbacks"]
+            red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+
+            for col in sheet.iter_cols(1, sheet.max_column):
+                if col[0].value == "Delay (minutes)":
+                    delay_col_letter = col[0].column_letter
+                    break
+
+            if 'delay_col_letter' in locals():
+                sheet.conditional_formatting.add(
+                    f"{delay_col_letter}2:{delay_col_letter}{sheet.max_row}",
+                    CellIsRule(operator='greaterThan', formula=['40'], fill=red_fill)
+                )
+
+        messagebox.showinfo("Success", f"The Excel file has been saved at: {output_path}")
+    except Exception as e:
+        messagebox.showerror("Error", f"Error during conversion: {e}")
+
+
+def select_file():
+    file_path = filedialog.askopenfilename(
+        title="Select CSV file",
+        filetypes=(("CSV Files", "*.csv"), ("All Files", "*.*"))
+    )
+    csv_path.set(file_path)
+
+
+def select_save_path():
+    file_path = filedialog.asksaveasfilename(
+        title="Save Excel file",
+        defaultextension=".xlsx",
+        filetypes=(("Excel Files", "*.xlsx"), ("All Files", "*.*"))
+    )
+    excel_path.set(file_path)
+
+
+def convert_file():
+    input_path = csv_path.get()
+    output_path = excel_path.get()
+
+    if not input_path or not output_path:
+        messagebox.showwarning("Warning", "Please select a CSV file and a save path.")
+        return
+
+    process_csv(input_path, output_path)
+
+
+# Interfaz
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("blue")
 
 root = ctk.CTk()
 root.title("CSV to Excel Converter")
 root.geometry("500x400")
 
-# Global variables for input and output paths
 csv_path = ctk.StringVar()
 excel_path = ctk.StringVar()
 
-# Labels and input fields
 ctk.CTkLabel(root, text="CSV File:", font=("Arial", 14)).pack(pady=10)
 ctk.CTkEntry(root, textvariable=csv_path, width=400).pack(pady=5)
 ctk.CTkButton(root, text="Select File", command=select_file).pack(pady=5)
@@ -201,8 +212,6 @@ ctk.CTkLabel(root, text="Save as (Excel):", font=("Arial", 14)).pack(pady=10)
 ctk.CTkEntry(root, textvariable=excel_path, width=400).pack(pady=5)
 ctk.CTkButton(root, text="Select Path", command=select_save_path).pack(pady=5)
 
-# Button to convert the file
 ctk.CTkButton(root, text="Convert File", command=convert_file, fg_color="green").pack(pady=20)
 
-# Start the application
 root.mainloop()
